@@ -6,11 +6,6 @@ deployed using Streamlit.
 
 ---
 
-## 🚀 Live App
-(After deployment, add your Streamlit link here)
-
----
-
 ## 🧠 Problem Statement
 
 Financial markets move in different regimes:
@@ -69,26 +64,29 @@ This project builds an ML pipeline to classify market regimes using historical d
             └─────────────────────┘
 
 # 📂 Project Structure
-market-regime-ml/
+market_regime_ml/
 │
-├── app/
-│ └── streamlit_app.py # Streamlit UI
+├── data/
+│   └── raw_data.csv
 │
 ├── features/
-│ └── feature_engineering.py # Technical indicators
-│
-├── labeling/
-│ └── label_generator.py # Regime labeling logic
+│   └── feature_engineering.py
 │
 ├── models/
-│ ├── train.py # Model training
-│ ├── evaluate.py # Model evaluation
-│ ├── saved_model.pkl # Trained XGBoost model
-│ └── *.png # Evaluation visualizations
+│   ├── train.py
+│   ├── evaluate.py
+│   └── saved_model.pkl
 │
-├── download_data.py # Historical data download
-├── requirements.txt
-└── .gitignore
+├── labeling/
+│   └── label_generator.py
+│
+├── app/
+│   └── streamlit_app.py
+│
+├── notebooks/
+│   └── experimentation.ipynb
+│
+└── README.md
 
 
 ---
