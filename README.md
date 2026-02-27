@@ -6,11 +6,6 @@ deployed using Streamlit.
 
 ---
 
-## 🚀 Live App
-(After deployment, add your Streamlit link here)
-
----
-
 ## 🧠 Problem Statement
 
 Financial markets move in different regimes:
