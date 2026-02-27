@@ -43,28 +43,32 @@ def load_model():
 
 @st.cache_data(ttl=3600)
 def fetch_data(ticker: str, period: str = "3y") -> pd.DataFrame:
-    local_path = "data/raw_data.csv"
-    if os.path.exists(local_path):
-        df = pd.read_csv(local_path, index_col=0, parse_dates=True)
-        df.index = pd.to_datetime(df.index.date)
-        return df
-
     for attempt in range(3):
         try:
-            t = yf.Ticker(ticker)
-            df = t.history(period=period)
+            df = yf.download(
+                ticker,
+                period=period,
+                progress=False,
+                auto_adjust=False,
+                threads=False
+            )
+
             if not df.empty:
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
+
                 df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
-                df.index = pd.to_datetime(df.index.date)
+                df.index = pd.to_datetime(df.index)
                 return df
-            time.sleep(5)
+
+            time.sleep(3)
+
         except Exception as e:
             if attempt < 2:
-                time.sleep(5)
+                time.sleep(3)
                 continue
             st.error(f"Error fetching data: {e}")
+
     return pd.DataFrame()
 
 
