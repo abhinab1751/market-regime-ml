@@ -43,33 +43,37 @@ def load_model():
 
 @st.cache_data(ttl=3600)
 def fetch_data(ticker: str, period: str = "3y") -> pd.DataFrame:
-    for attempt in range(3):
-        try:
-            df = yf.download(
-                ticker,
-                period=period,
-                progress=False,
-                auto_adjust=False,
-                threads=False
-            )
+    ticker = ticker.strip().upper()
 
-            if not df.empty:
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(0)
+    period_map = {
+        "1y": 365,
+        "2y": 730,
+        "3y": 1095,
+        "5y": 1825
+    }
 
-                df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
-                df.index = pd.to_datetime(df.index)
-                return df
+    days = period_map.get(period, 1095)
+    start_date = pd.Timestamp.today() - pd.Timedelta(days=days)
 
-            time.sleep(3)
+    try:
+        df = yf.download(
+            ticker,
+            start=start_date,
+            interval="1d",
+            progress=False,
+            threads=False
+        )
 
-        except Exception as e:
-            if attempt < 2:
-                time.sleep(3)
-                continue
-            st.error(f"Error fetching data: {e}")
+        if df.empty:
+            return pd.DataFrame()
 
-    return pd.DataFrame()
+        df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
+        df.index = pd.to_datetime(df.index)
+        return df
+
+    except Exception as e:
+        st.error(f"Error fetching data: {e}")
+        return pd.DataFrame()
 
 
 def predict_regime(df: pd.DataFrame, artifacts: dict):
