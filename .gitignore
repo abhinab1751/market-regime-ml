@@ -40,6 +40,5 @@ Thumbs.db
 # ==============================
 *.tmp
 *.bak
-
-data/
+data/*.tmp
 notebooks/
