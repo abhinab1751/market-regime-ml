@@ -34,64 +34,68 @@ REGIME_EMOJI = {
     'Sideways': '🟡'
 }
 
+PERIOD_MAP = {"1y": 365, "2y": 730, "3y": 1095, "5y": 1825}
+
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
+
+# ── ALL FUNCTIONS FIRST ───────────────────────────────────────────────────
 
 @st.cache_resource
 def load_model():
-    with open("models/saved_model.pkl", "rb") as f:
+    model_path = os.path.join(BASE_DIR, 'models', 'saved_model.pkl')
+    with open(model_path, "rb") as f:
         return pickle.load(f)
 
 
-@st.cache_data(ttl=3600)
-def fetch_data(ticker: str, period: str = "3y") -> pd.DataFrame:
-    ticker = ticker.strip().upper()
-
-    period_map = {
-        "1y": 365,
-        "2y": 730,
-        "3y": 1095,
-        "5y": 1825
-    }
-
-    days = period_map.get(period, 1095)
+def fetch_data(ticker: str, days: int) -> pd.DataFrame:
     start_date = pd.Timestamp.today() - pd.Timedelta(days=days)
+    start_str  = start_date.strftime('%Y-%m-%d')
 
     try:
-        df = yf.download(
-            ticker,
-            start=start_date,
-            interval="1d",
-            progress=False,
-            threads=False
-        )
+        t  = yf.Ticker(ticker)
+        df = t.history(start=start_str)
+        if not df.empty:
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
+            df.index = pd.to_datetime(df.index.date)
+            return df
+    except Exception as e:
+        st.warning(f"Yahoo Finance error: {e}")
 
-        if df.empty:
-            return pd.DataFrame()
-
-        df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
+    # Fallback to local CSV filtered by period
+    local_path = os.path.join(BASE_DIR, 'data', 'raw_data.csv')
+    if os.path.exists(local_path):
+        st.warning("⚠️ Using cached local data — Yahoo Finance unavailable.")
+        df = pd.read_csv(local_path, index_col=0, parse_dates=True)
         df.index = pd.to_datetime(df.index)
+        df = df[df.index >= pd.Timestamp(start_str)]
         return df
 
-    except Exception as e:
-        st.error(f"Error fetching data: {e}")
-        return pd.DataFrame()
+    return pd.DataFrame()
 
 
 def predict_regime(df: pd.DataFrame, artifacts: dict):
     df_feat = engineer_features(df.copy())
     df_feat = df_feat.replace([float('inf'), float('-inf')], float('nan'))
     df_feat = df_feat.dropna(subset=FEATURE_COLS)
-
-    X      = df_feat[FEATURE_COLS]
-    X_sc   = artifacts['scaler'].transform(X)
-    preds  = artifacts['model'].predict(X_sc)
-    probas = artifacts['model'].predict_proba(X_sc)
-    labels = artifacts['label_encoder'].inverse_transform(preds)
+    X       = df_feat[FEATURE_COLS]
+    X_sc    = artifacts['scaler'].transform(X)
+    preds   = artifacts['model'].predict(X_sc)
+    probas  = artifacts['model'].predict_proba(X_sc)
+    labels  = artifacts['label_encoder'].inverse_transform(preds)
     return df_feat, labels, probas, artifacts['label_encoder'].classes_
 
+
+# ── SIDEBAR ───────────────────────────────────────────────────────────────
 
 st.sidebar.title("⚙️ Settings")
 ticker = st.sidebar.text_input("Ticker Symbol", value="SPY")
 period = st.sidebar.selectbox("Data Period", ["1y", "2y", "3y", "5y"], index=2)
+st.sidebar.markdown("---")
+if st.sidebar.button("🔄 Refresh Live Data"):
+    st.rerun()
 st.sidebar.markdown("---")
 st.sidebar.info("Model: XGBoost | Labels: Bullish / Bearish / Sideways")
 st.sidebar.markdown("**Ticker Examples:**")
@@ -100,6 +104,8 @@ st.sidebar.markdown("- `QQQ` — NASDAQ ETF")
 st.sidebar.markdown("- `^NSEI` — NIFTY 50")
 st.sidebar.markdown("- `AAPL` — Apple Inc")
 st.sidebar.markdown("- `TSLA` — Tesla")
+
+# ── MAIN APP ──────────────────────────────────────────────────────────────
 
 st.title("📊 Intelligent Market Regime Classifier")
 st.markdown("Classifies market conditions into **Bullish**, **Bearish**, or **Sideways** using ML + technical indicators.")
@@ -110,11 +116,16 @@ except FileNotFoundError:
     st.error("Model not found. Please run `python -m models.train` first.")
     st.stop()
 
+days = PERIOD_MAP.get(period, 1095)
+
 with st.spinner("Fetching market data..."):
-    raw_df = fetch_data(ticker, period)
+    raw_df = fetch_data(ticker, days)
+
+# Debug line — remove after confirming it works
+st.write(f"DEBUG — ticker: {ticker}, days: {days}, rows: {len(raw_df)}, from: {raw_df.index[0] if not raw_df.empty else 'N/A'}")
 
 if raw_df.empty:
-    st.error(f"No data found for ticker '{ticker}'. Try SPY, QQQ, AAPL, or TSLA.")
+    st.error(f"No data found for ticker '{ticker}'.")
     st.stop()
 
 try:
@@ -127,45 +138,40 @@ if len(labels) == 0:
     st.error("Not enough data to generate predictions. Try a longer period.")
     st.stop()
 
+# ── CURRENT REGIME CARDS ──────────────────────────────────────────────────
+
 current_regime = labels[-1]
 current_probs  = probas[-1]
 
 col1, col2, col3 = st.columns(3)
-col1.metric(
-    "Current Regime",
+col1.metric("Current Regime",
     f"{REGIME_EMOJI[current_regime]} {current_regime}",
-    delta=f"{current_probs.max()*100:.1f}% confidence"
-)
-col2.metric(
-    "Latest Close",
+    delta=f"{current_probs.max()*100:.1f}% confidence")
+col2.metric("Latest Close",
     f"${df_feat['Close'].iloc[-1]:,.2f}",
-    delta=f"{df_feat['Close'].pct_change().iloc[-1]*100:.2f}%"
-)
-col3.metric(
-    "RSI",
+    delta=f"{df_feat['Close'].pct_change().iloc[-1]*100:.2f}%")
+col3.metric("RSI",
     f"{df_feat['RSI'].iloc[-1]:.1f}",
     delta="Overbought" if df_feat['RSI'].iloc[-1] > 70 else
-          "Oversold"   if df_feat['RSI'].iloc[-1] < 30 else "Neutral"
-)
+          "Oversold"   if df_feat['RSI'].iloc[-1] < 30 else "Neutral")
 
 st.markdown("---")
 
+# ── REGIME PROBABILITIES ──────────────────────────────────────────────────
 
 st.subheader("📊 Regime Probabilities (Latest)")
 prob_cols = st.columns(3)
 for i, cls in enumerate(classes):
     prob_cols[i].metric(cls, f"{current_probs[i]*100:.1f}%")
 
+# ── PRICE CHART ───────────────────────────────────────────────────────────
+
 st.subheader("📈 Price Chart with Regime Overlay")
-
 fig = go.Figure()
-
 fig.add_trace(go.Candlestick(
     x=df_feat.index,
-    open=df_feat['Open'],
-    high=df_feat['High'],
-    low=df_feat['Low'],
-    close=df_feat['Close'],
+    open=df_feat['Open'], high=df_feat['High'],
+    low=df_feat['Low'],   close=df_feat['Close'],
     name="Price",
     increasing_line_color='#00C853',
     decreasing_line_color='#D50000'
@@ -184,79 +190,58 @@ for regime, color in REGIME_COLORS.items():
             start = dates[i]
     groups.append((start, dates[-1]))
     for s, e in groups:
-        fig.add_vrect(
-            x0=s, x1=e,
-            fillcolor=color,
-            opacity=0.10,
-            layer="below",
-            line_width=0
-        )
+        fig.add_vrect(x0=s, x1=e, fillcolor=color,
+                      opacity=0.10, layer="below", line_width=0)
 
-fig.add_trace(go.Scatter(
-    x=df_feat.index, y=df_feat['SMA_50'],
-    name="SMA 50", line=dict(color='orange', width=1)
-))
-fig.add_trace(go.Scatter(
-    x=df_feat.index, y=df_feat['SMA_200'],
-    name="SMA 200", line=dict(color='purple', width=1)
-))
-
-fig.update_layout(
-    height=500,
-    xaxis_rangeslider_visible=False,
-    template="plotly_dark",
-    legend=dict(orientation="h")
-)
+fig.add_trace(go.Scatter(x=df_feat.index, y=df_feat['SMA_50'],
+    name="SMA 50",  line=dict(color='orange', width=1)))
+fig.add_trace(go.Scatter(x=df_feat.index, y=df_feat['SMA_200'],
+    name="SMA 200", line=dict(color='purple', width=1)))
+fig.update_layout(height=500, xaxis_rangeslider_visible=False,
+                  template="plotly_dark", legend=dict(orientation="h"))
 st.plotly_chart(fig, use_container_width=True)
+
+# ── RSI ───────────────────────────────────────────────────────────────────
 
 st.subheader("🔁 RSI")
 fig_rsi = go.Figure()
-fig_rsi.add_trace(go.Scatter(
-    x=df_feat.index, y=df_feat['RSI'],
-    name="RSI", line=dict(color='cyan')
-))
+fig_rsi.add_trace(go.Scatter(x=df_feat.index, y=df_feat['RSI'],
+    name="RSI", line=dict(color='cyan')))
 fig_rsi.add_hline(y=70, line_dash="dash", line_color="red",   annotation_text="Overbought")
 fig_rsi.add_hline(y=30, line_dash="dash", line_color="green", annotation_text="Oversold")
 fig_rsi.update_layout(height=250, template="plotly_dark")
 st.plotly_chart(fig_rsi, use_container_width=True)
 
+# ── MACD ──────────────────────────────────────────────────────────────────
+
 st.subheader("📉 MACD")
 fig_macd = go.Figure()
-fig_macd.add_trace(go.Scatter(
-    x=df_feat.index, y=df_feat['MACD'],
-    name="MACD", line=dict(color='#2196F3')
-))
-fig_macd.add_trace(go.Scatter(
-    x=df_feat.index, y=df_feat['MACD_Signal'],
-    name="Signal", line=dict(color='orange')
-))
-fig_macd.add_trace(go.Bar(
-    x=df_feat.index, y=df_feat['MACD_Hist'],
-    name="Histogram", marker_color='gray'
-))
+fig_macd.add_trace(go.Scatter(x=df_feat.index, y=df_feat['MACD'],
+    name="MACD",   line=dict(color='#2196F3')))
+fig_macd.add_trace(go.Scatter(x=df_feat.index, y=df_feat['MACD_Signal'],
+    name="Signal", line=dict(color='orange')))
+fig_macd.add_trace(go.Bar(x=df_feat.index, y=df_feat['MACD_Hist'],
+    name="Histogram", marker_color='gray'))
 fig_macd.update_layout(height=250, template="plotly_dark")
 st.plotly_chart(fig_macd, use_container_width=True)
 
+# ── BOLLINGER BANDS ───────────────────────────────────────────────────────
+
 st.subheader("📊 Bollinger Bands")
 fig_bb = go.Figure()
-fig_bb.add_trace(go.Scatter(
-    x=df_feat.index, y=df_feat['Close'],
-    name="Close", line=dict(color='white', width=1)
-))
-fig_bb.add_trace(go.Scatter(
-    x=df_feat.index, y=df_feat['BB_Upper'],
-    name="Upper Band", line=dict(color='red', width=1, dash='dash')
-))
-fig_bb.add_trace(go.Scatter(
-    x=df_feat.index, y=df_feat['BB_Lower'],
+fig_bb.add_trace(go.Scatter(x=df_feat.index, y=df_feat['Close'],
+    name="Close", line=dict(color='white', width=1)))
+fig_bb.add_trace(go.Scatter(x=df_feat.index, y=df_feat['BB_Upper'],
+    name="Upper Band", line=dict(color='red', width=1, dash='dash')))
+fig_bb.add_trace(go.Scatter(x=df_feat.index, y=df_feat['BB_Lower'],
     name="Lower Band", line=dict(color='green', width=1, dash='dash'),
-    fill='tonexty', fillcolor='rgba(0,100,80,0.05)'
-))
+    fill='tonexty', fillcolor='rgba(0,100,80,0.05)'))
 fig_bb.update_layout(height=300, template="plotly_dark")
 st.plotly_chart(fig_bb, use_container_width=True)
 
-st.subheader("📋 Recent Regime Predictions (Last 30 Days)")
+# ── RECENT PREDICTIONS TABLE ──────────────────────────────────────────────
 
+st.subheader("📋 Recent Regime Predictions (Last 30 Days)")
 classes_list = list(classes)
 bullish_idx  = classes_list.index('Bullish')
 bearish_idx  = classes_list.index('Bearish')
